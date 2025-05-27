@@ -60,8 +60,11 @@ async function generatePaintings(req, res) {
       'SELECT id, summary FROM ideas WHERE title_id = ? ORDER BY created_at DESC',
       prevParams
     );
+  
     
-    // Generate ideas - first step (sequential)
+    // Start image generation in parallel (respecting MAX_PARALLEL limit)
+    const processIdeas = async () => {
+          // Generate ideas - first step (sequential)
     const newIdeas = [];
     for (let i = 0; i < quantity; i++) {
       const idea = await openRouterService.generateIdeas(
@@ -84,9 +87,6 @@ async function generatePaintings(req, res) {
         paintingParams
       );
     }
-    
-    // Start image generation in parallel (respecting MAX_PARALLEL limit)
-    const processIdeas = async () => {
       const pendingIdeas = [...newIdeas];
       const activePromises = [];
       
@@ -118,8 +118,7 @@ async function generatePaintings(req, res) {
     
     // Return immediately with the generated ideas
     res.status(200).json({
-      message: `Started generating ${quantity} paintings`,
-      ideas: newIdeas
+      message: `Started generating ${quantity} paintings`
     });
   } catch (error) {
     console.error('Error in generatePaintings:', error);

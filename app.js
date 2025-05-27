@@ -114,7 +114,7 @@ const ServerAPI = {
                             title: concept.title,
                             instructions: concept.instructions || 'No custom instructions provided',
                             referenceCount: references.length,
-                            referenceImages: references.map(ref => ref.data),
+                            referenceImages: references?.map(ref => ref.data) || [],
                             fullPrompt: concept.fullPrompt
                         },
                         status: 'completed',
@@ -424,7 +424,7 @@ function setupEventListeners() {
             return;
         }
         
-        showLoading(true);
+        //showLoading(true);
         
         try {
             const instructions = customInstructions.value.trim();
@@ -463,7 +463,10 @@ function setupEventListeners() {
             const generateResponse = await generatePaintings(currentTitle.id, quantity);
             console.log("Generate thumbnails response:", generateResponse.data);
             
-            // Start polling for thumbnail status instead of loading immediately
+            // Start the server-side thumbnail generation process
+            generateServerThumbnails(currentTitle, currentReferenceDataMap, quantity, false);
+            
+            // Start polling for thumbnail status
             pollThumbnailStatus(currentTitle.id, quantity);
 
             // Refresh titles list after starting generation/polling
@@ -475,6 +478,7 @@ function setupEventListeners() {
             // No longer call loadThumbnails here immediately
             // console.log("Loading thumbnails");
             // await loadThumbnails(currentTitle.id);
+
         } catch (error) {
             console.error('Error generating thumbnails:', error);
             showLoading(false);
@@ -512,6 +516,8 @@ function setupEventListeners() {
             
             // Get the updated thumbnails
             await loadThumbnails(currentTitle.id);
+
+            generateServerThumbnails(currentTitle, currentReferenceDataMap, quantity, false);
         } catch (error) {
             console.error('Error generating more thumbnails:', error);
             alert('Failed to generate additional thumbnails. Please try again.');
@@ -802,6 +808,7 @@ async function removeReferenceImage(id, references, container) {
 // Generate thumbnails using server API
 async function generateServerThumbnails(titleObj, references, quantity, isAdditional) {
     // Show progress section
+    console.log("titleObj", titleObj)
     progressSection.style.display = 'block';
     thumbnailsEmptyState.style.display = 'none';
     
@@ -822,7 +829,12 @@ async function generateServerThumbnails(titleObj, references, quantity, isAdditi
         
         const loadingThumb = document.createElement('div');
         loadingThumb.className = 'loading-thumbnail';
-        
+
+        const statusThumb = document.createElement('div');
+        statusThumb.className = 'thumbnail-status';
+        statusThumb.textContent = 'creating prompt...';
+
+        thumbContainer.appendChild(statusThumb);
         thumbContainer.appendChild(loadingThumb);
         thumbnailsGrid.appendChild(thumbContainer);
     }
@@ -971,6 +983,23 @@ function renderThumbnail(thumbnailData, index) {
         thumbContainer.appendChild(errorDiv);
         return;
     }
+
+
+    let statusElement = thumbContainer.querySelector('.thumbnail-status');
+    if (!statusElement) {
+        statusElement = document.createElement('div');
+        statusElement.className = 'thumbnail-status';
+        thumbContainer.appendChild(statusElement);
+    }
+
+    if (thumbnailData.status === 'processing') {
+        statusElement.textContent = 'Processing image';
+        statusElement.style.display = 'block';
+    } else if (thumbnailData.status === 'pending') {
+        statusElement.textContent = 'Pending';
+        statusElement.style.display = 'block';
+    }
+
     
     // Regular thumbnail rendering for successful thumbnails
     const img = document.createElement('img');
@@ -1133,7 +1162,7 @@ function renderTitlesList() {
         
         titleItem.textContent = title.title;
         titleItem.addEventListener('click', () => {
-            loadTitle(title);
+            loadTitle(titleItem);
         });
         
         titleList.appendChild(titleItem);
@@ -1145,7 +1174,7 @@ async function loadTitle(titleItem) {
     showLoading(true);
     
     try {
-        const titleId = titleItem.id;
+        const titleId = titleItem.dataset.id;
         console.log(`Starting to load title with ID: ${titleId}`);
         
         // Get the title details
@@ -1227,6 +1256,7 @@ async function loadTitle(titleItem) {
 
 // Render saved thumbnails for a title
 function renderSavedThumbnails(title) {
+    console.log("title", title)
     thumbnailsGrid.innerHTML = '';
     
     if (!title || !title.thumbnails || !Array.isArray(title.thumbnails) || title.thumbnails.length === 0) {
@@ -1319,7 +1349,7 @@ async function loadThumbnails(titleId) {
         console.log('Received reference data map:', currentReferenceDataMap);
         
         // Update current title thumbnails
-        if (currentTitle && currentTitle.id === titleId) {
+        if (currentTitle && currentTitle.id === parseInt(titleId)) {
             currentTitle.thumbnails = thumbnails;
             renderSavedThumbnails(currentTitle);
         }
@@ -1333,18 +1363,29 @@ async function loadThumbnails(titleId) {
 }
 
 // Poll for thumbnail generation status
-async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
-    console.log(`[Poll #${attempt + 1}] Entered pollThumbnailStatus for title ${titleId}`);
+async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0, retryCount = 0) {
+    console.log(`[Poll #${attempt + 1}] Entered pollThumbnailStatus for title ${titleId} (Retry #${retryCount})`);
     const maxAttempts = 40; // Poll for up to 2 minutes (40 * 3s)
     const pollInterval = 3000; // Poll every 3 seconds
+    const maxRetries = 3; // Maximum number of retries for the entire polling process
 
     if (attempt >= maxAttempts) {
         console.error(`[Poll #${attempt + 1}] Polling timed out.`);
-        alert('Thumbnail generation is taking longer than expected. Please check back later.');
-        showLoading(false);
-        // Optionally load whatever is available
-        await loadThumbnails(titleId); 
-        return;
+        
+        if (retryCount < maxRetries) {
+            console.log(`[Poll #${attempt + 1}] Starting retry #${retryCount + 1} of polling process`);
+            // Wait 5 seconds before starting the next retry
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            // Start a new polling cycle with reset attempt counter
+            return pollThumbnailStatus(titleId, expectedQuantity, 0, retryCount + 1);
+        } else {
+            console.error(`[Poll #${attempt + 1}] Max retries (${maxRetries}) reached. Giving up.`);
+            alert('Thumbnail generation is taking longer than expected. Please check back later.');
+            showLoading(false);
+            // Load whatever is available
+            await loadThumbnails(titleId); 
+            return;
+        }
     }
 
     try {
@@ -1369,9 +1410,6 @@ async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
         let pendingCount = 0;
 
         // Render each thumbnail with its current status
-        // We need to determine the correct index for rendering.
-        // If loadTitle fetches initial thumbnails, we might need to map by ID or rely on the ASC order.
-        // Assuming the index corresponds to the position in the ASC sorted list for this title.
         relevantThumbnails.forEach((thumbnail, index) => {
             // Ensure the container exists (it should have been created by generateServerThumbnails)
             const containerExists = document.getElementById(`thumb-${index}`);
@@ -1391,17 +1429,14 @@ async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
         const totalRelevant = relevantThumbnails.length;
         console.log(`Status: ${completedCount} completed/failed, ${processingCount} processing, ${pendingCount} pending out of ${totalRelevant}`);
 
-        // Update progress UI (example)
+        // Update progress UI
         ai1Status.textContent = 'Thumbnail ideas generated.';
         ai1Progress.style.width = '100%';
-        // Base progress on completed thumbnails relative to the total number fetched so far for this title
-        // or use expectedQuantity if it's more reliable for the current batch
         const progressPercentage = totalRelevant > 0 ? (completedCount / totalRelevant) * 100 : 0;
         ai2Status.textContent = `Generating images... ${completedCount}/${totalRelevant} complete`;
         ai2Progress.style.width = `${progressPercentage}%`;
 
-        // Check if all *relevant* thumbnails for this title are completed or failed
-        // This check might need refinement if multiple batches can run concurrently
+        // Check if all relevant thumbnails are completed or failed
         if (completedCount === totalRelevant && totalRelevant >= expectedQuantity) {
             console.log(`[Poll #${attempt + 1}] Condition met. Polling finished.`);
             progressSection.style.display = 'none';
@@ -1410,21 +1445,26 @@ async function pollThumbnailStatus(titleId, expectedQuantity, attempt = 0) {
         } else {
             console.log(`[Poll #${attempt + 1}] Condition not met (${completedCount}/${totalRelevant} completed). Scheduling next poll.`);
             // Not finished, poll again after interval
-            setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1), pollInterval);
+            setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1, retryCount), pollInterval);
         }
     } catch (error) {
         console.error(`[Poll #${attempt + 1}] Error during polling:`, error);
-        // Handle polling error (e.g., show message, maybe stop polling)
-        // If it's a transient network error, could retry a few times before failing
+        // Handle polling error
         if (attempt < maxAttempts - 1) {
-             console.log(`[Poll #${attempt + 1}] Retrying poll after error.`);
-             setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1), pollInterval); // Retry on error
+            console.log(`[Poll #${attempt + 1}] Retrying poll after error.`);
+            setTimeout(() => pollThumbnailStatus(titleId, expectedQuantity, attempt + 1, retryCount), pollInterval);
         } else {
-             console.error(`[Poll #${attempt + 1}] Max retries reached after error.`);
-             alert('Failed to get thumbnail status updates after multiple attempts. Please check back later.');
-             showLoading(false);
-             // Load whatever is available on final error
-             await loadThumbnails(titleId);
+            // If we hit max attempts, start a new retry cycle if we haven't exceeded maxRetries
+            if (retryCount < maxRetries) {
+                console.log(`[Poll #${attempt + 1}] Starting retry #${retryCount + 1} after error`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                return pollThumbnailStatus(titleId, expectedQuantity, 0, retryCount + 1);
+            } else {
+                console.error(`[Poll #${attempt + 1}] Max retries (${maxRetries}) reached after error.`);
+                alert('Failed to get thumbnail status updates after multiple attempts. Please check back later.');
+                showLoading(false);
+                await loadThumbnails(titleId);
+            }
         }
     }
 }

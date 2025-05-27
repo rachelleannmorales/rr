@@ -8,7 +8,8 @@ let api = null;
 const initAPI = async () => {
   try {
     // Use the current origin to get the config (for local development, we might need to adjust this)
-    const configResponse = await axios.get('/api/config');
+    const currentHostname = window.location.hostname;
+    const configResponse = await axios.get(`http://${currentHostname}:3000/api/config`);
     const { serverIP, apiPort } = configResponse.data;
     API_URL = `http://${serverIP}:${apiPort}/api`;
     
