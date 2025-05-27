@@ -517,7 +517,7 @@ function setupEventListeners() {
             // Get the updated thumbnails
             await loadThumbnails(currentTitle.id);
 
-            generateServerThumbnails(currentTitle, currentReferenceDataMap, quantity, false);
+            generateServerThumbnails(currentTitle, currentReferenceDataMap, quantity, true);
         } catch (error) {
             console.error('Error generating more thumbnails:', error);
             alert('Failed to generate additional thumbnails. Please try again.');
